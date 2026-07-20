@@ -18,6 +18,12 @@ inputs:
   DOCKER_ID:
     description: Docker ID for authentication
     required: true
+  GHCR_TOKEN:
+    description: Token for pushing PR images to ghcr.io/pytorch/ci-image (built-in GITHUB_TOKEN)
+    required: false
+  GHCR_USER:
+    description: Username for the ghcr.io login on the PR path
+    required: false
 
 runs:
   using: composite
@@ -47,6 +53,8 @@ runs:
         REMOTE_BUILDKIT: "1"
         DOCKER_TOKEN: ${{ inputs.DOCKER_TOKEN }}
         DOCKER_ID: ${{ inputs.DOCKER_ID }}
+        GHCR_TOKEN: ${{ inputs.GHCR_TOKEN }}
+        GHCR_USER: ${{ inputs.GHCR_USER }}
         DOCKER_IMAGE_NAME: ${{ inputs.docker-image-name }}
         DOCKER_IMAGE_PREFIX: ${{ inputs.custom-tag-prefix }}
         DOCKER_BUILD_DIR: ${{ inputs.docker-build-dir }}
@@ -63,25 +71,40 @@ runs:
         GIT_COMMIT_SHA=${GITHUB_SHA:-$(git rev-parse HEAD)}
         CI_FOLDER_SHA=$(git rev-parse HEAD:.ci/docker)
 
-        # Same tag set the local-daemon path publishes: branch / commit /
-        # .ci/docker-hash tags are always produced; the floating ${prefix} tag is
-        # only published from main so a release-branch rebuild can't clobber the
-        # image main CI consumes.
-        PREFIX="docker.io/pytorch/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_PREFIX}"
-        TAGS=(
-          -t "${PREFIX}-${GIT_BRANCH_NAME}"
-          -t "${PREFIX}-${GIT_COMMIT_SHA}"
-          -t "${PREFIX}-${CI_FOLDER_SHA}"
-        )
-        if [[ "${GIT_BRANCH_NAME}" == "main" ]]; then
-          TAGS+=(-t "${PREFIX}")
+        # Registry + tag set depend on the event:
+        #  - pull_request: publish ONLY the content-addressed image to GHCR
+        #    ci-image (ghcr.io/pytorch/ci-image:<name>-<variant>-<.ci/docker
+        #    hash>), which the ciflow/binaries test run consumes. Keeps per-PR
+        #    images off the public Docker Hub repo and off the floating tag.
+        #  - push (main / release / rc tags): publish to Docker Hub as before --
+        #    branch / commit / .ci/docker-hash tags, plus the floating <prefix>
+        #    tag only from main so a release-branch rebuild can't clobber it.
+        if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
+          PREFIX="ghcr.io/pytorch/ci-image:${DOCKER_IMAGE_NAME}-${DOCKER_IMAGE_PREFIX}"
+          TAGS=(-t "${PREFIX}-${CI_FOLDER_SHA}")
+          REGISTRY="ghcr.io"
+          LOGIN_USER="${GHCR_USER}"
+          LOGIN_TOKEN="${GHCR_TOKEN}"
+        else
+          PREFIX="docker.io/pytorch/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_PREFIX}"
+          TAGS=(
+            -t "${PREFIX}-${GIT_BRANCH_NAME}"
+            -t "${PREFIX}-${GIT_COMMIT_SHA}"
+            -t "${PREFIX}-${CI_FOLDER_SHA}"
+          )
+          if [[ "${GIT_BRANCH_NAME}" == "main" ]]; then
+            TAGS+=(-t "${PREFIX}")
+          fi
+          REGISTRY="docker.io"
+          LOGIN_USER="${DOCKER_ID}"
+          LOGIN_TOKEN="${DOCKER_TOKEN}"
         fi
 
-        # WITH_PUSH gates publishing (build.sh pushes when it is true; PRs just
-        # validate the build). Log in only when we are going to push.
+        # WITH_PUSH gates publishing (build.sh pushes when it is true; fork PRs
+        # have no credentials and stay build-only). Log in only when pushing.
         set +x
         if [[ "${WITH_PUSH:-false}" == "true" ]]; then
-          echo "${DOCKER_TOKEN}" | docker login -u "${DOCKER_ID}" --password-stdin
+          echo "${LOGIN_TOKEN}" | docker login "${REGISTRY}" -u "${LOGIN_USER}" --password-stdin
         fi
         set -x
 

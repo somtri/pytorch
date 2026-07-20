@@ -23,7 +23,11 @@ on:
 
 env:
   DOCKER_BUILDKIT: 1
-  WITH_PUSH: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.ref, 'refs/tags/v')) }}
+  # Publish on protected-ref pushes (main / release / release-candidate tags ->
+  # Docker Hub) and on same-repo PRs (-> GHCR ci-image, for ciflow/binaries test
+  # runs). Fork PRs have no push credentials, so they stay build-only. The
+  # registry + tag set is chosen per-event in binary-docker-build.
+  WITH_PUSH: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name == 'workflow_dispatch' }}
   cancel-in-progress: true
@@ -50,6 +54,12 @@ jobs:
   build:
     if: github.repository_owner == 'pytorch'
     needs: select-runner
+    # packages: write lets the same-repo PR path push the content-addressed
+    # builder image to ghcr.io/pytorch/ci-image using the built-in GITHUB_TOKEN
+    # (PRs get no environment secrets, so GHCR_PAT/DOCKER_TOKEN are unavailable).
+    permissions:
+      contents: read
+      packages: write
     environment: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.ref, 'refs/tags/v')) && 'docker-build') || '' }}
     runs-on: ${{ matrix.runner }}
     container:
@@ -81,3 +91,5 @@ jobs:
           docker-build-dir: manywheel
           DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
           DOCKER_ID: ${{ secrets.DOCKER_ID }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
