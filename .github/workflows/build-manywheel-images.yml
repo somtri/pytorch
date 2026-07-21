@@ -83,18 +83,15 @@ jobs:
         ]
     name: ${{ matrix.name }}:${{ matrix.tag }}
     steps:
-      # Resolve the composite action from this ref (not @main) so a PR that
-      # changes binary-docker-build is exercised by its own CI. A sparse
-      # checkout of .github/actions is enough for GHA to load the local action;
-      # the action then does its own full checkout-pytorch.
-      - name: Checkout PyTorch
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          submodules: false
-          sparse-checkout: .github/actions
-          show-progress: false
+      # TESTING ONLY -- REVERT TO @main BEFORE MERGE.
+      # Local (`./`) composite actions don't resolve on the OSDC/ARC
+      # container-hook runners: the runner resolves the action on the host
+      # (/home/runner/_work) while `container:` steps check out to /__w, so it
+      # errors with "Can't find action.yml". `uses:` can't take an expression,
+      # so to exercise this PR's binary-docker-build change we temporarily pin
+      # the action to this PR branch (a downloadable remote ref).
       - name: Build docker image
-        uses: ./.github/actions/binary-docker-build
+        uses: pytorch/pytorch/.github/actions/binary-docker-build@atalman/cd-docker-content-addressed
         with:
           docker-image-name: ${{ matrix.name }}
           custom-tag-prefix: ${{ matrix.tag }}
